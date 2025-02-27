@@ -42,7 +42,7 @@ if uploaded_files:
     st.dataframe(df)
 
     # -----------------------------------------------------
-    # 2) Flag GFE rows
+    # 2) Flag GFE rows (row-level)
     # -----------------------------------------------------
     gfe_keywords = ["Follow-up for Prod/Info", "Follow Up for Information"]
     df["IsGFE"] = df["Communication"].apply(
@@ -50,43 +50,47 @@ if uploaded_files:
     )
 
     # -----------------------------------------------------
-    # 3) Classify Well Understood vs Not Well Understood (row-level)
+    # 3) Row-level classification: Well Understood vs Not Well Understood
+    #    based on "Product Event ID" (instead of "PE - PLI #")
     # -----------------------------------------------------
-    # Count distinct RFR codes per PE - PLI #
-    pli_rfr_counts = (
-        df.groupby("PE - PLI #")["RFR Codes"]
+    # Make sure your DataFrame has a column named "Product Event ID". 
+    # If it doesn't, adjust accordingly.
+    rfr_count_by_pe = (
+        df.groupby("Product Event ID")["RFR Codes"]
         .nunique()
         .rename("num_distinct_rfr")
     )
 
-    # RFR frequency across entire dataset
+    # Frequency of each RFR code across the entire dataset
     rfr_freq = df["RFR Codes"].value_counts().to_dict()
 
-    # Merge back
-    df = df.merge(pli_rfr_counts, on="PE - PLI #", how="left")
+    # Merge the distinct RFR counts back to df
+    df = df.merge(rfr_count_by_pe, on="Product Event ID", how="left")
 
-    def classify_well_understood(row):
-        """Row-level classification based on RFR logic."""
+    # Define a preliminary (row-level) classification
+    def preliminary_knowledge_class(row):
+        """Classify row-level knowledge understanding based on RFR logic."""
         if row["num_distinct_rfr"] > 1:
             return "Not Well Understood"
         else:
             freq = rfr_freq.get(row["RFR Codes"], 0)
             return "Well Understood" if freq >= 50 else "Not Well Understood"
 
-    df["KnowledgeClass"] = df.apply(classify_well_understood, axis=1)
+    df["KnowledgeClass"] = df.apply(preliminary_knowledge_class, axis=1)
 
     # -----------------------------------------------------
-    # 3A) Force entire Product Event to "Not Well Understood" 
-    #     if *any* row within that PE - PLI # is Not Well Understood
+    # 3A) PE level KnowledgeClass
+    #     => if ANY row in the same Product Event is "Not Well Understood",
+    #        then ALL rows become "Not Well Understood"
     # -----------------------------------------------------
-    df["KnowledgeClass"] = df.groupby("PE - PLI #")["KnowledgeClass"].transform(
+    df["PE level KnowledgeClass"] = df.groupby("Product Event ID")["KnowledgeClass"].transform(
         lambda group: "Not Well Understood" 
                       if "Not Well Understood" in group.values 
                       else "Well Understood"
     )
 
     # -----------------------------------------------------
-    # 4) Region & FDA checks
+    # 4) Region & FDA checks (we can reuse the same logic)
     # -----------------------------------------------------
     eu_countries = {
         "Austria", "Belgium", "Croatia", "Cyprus", "Czech Republic",
@@ -115,15 +119,18 @@ if uploaded_files:
         return country.strip().title() in greater_china_countries
 
     def is_fda_reportable(reportability_text):
-        # Strictly checks for "US FDA - MDR: Malfunction - Reportable"
+        # Strictly checks for the phrase
         return "US FDA - MDR: MALFUNCTION - REPORTABLE" in str(reportability_text).upper()
 
     # -----------------------------------------------------
-    # 5) Workflow classification function
+    # 5) PE level Workflow
+    #    => classify workflow based on "PE level KnowledgeClass"
     # -----------------------------------------------------
-    def classify_workflow(row):
+    def classify_pe_workflow(row):
+        # We read region/fda logic from the row
+        # But we use the *PE-level* knowledge class
         country = str(row.get("Country – PE", "")).strip().title()
-        knowledge = row.get("KnowledgeClass", "")
+        knowledge = row.get("PE level KnowledgeClass", "")  # PE-level classification
         rep_text = str(row.get("Reportability", "")).upper()
 
         us_terr = is_us_territory(country)
@@ -131,7 +138,6 @@ if uploaded_files:
         canada = is_canada(country)
         japan = is_japan(country)
         gchina = is_greater_china(country)
-
         fda_rep = is_fda_reportable(rep_text)
 
         # Workflow 1: US territory, NOT FDA Reportable, Well Understood
@@ -143,7 +149,7 @@ if uploaded_files:
             if (us_terr and fda_rep) or eu or canada:
                 return 2
 
-        # Workflow 3: US, EU, Canada (any reportability), Not Well Understood
+        # Workflow 3: (US or EU or Canada), Not Well Understood
         if (us_terr or eu or canada) and (knowledge == "Not Well Understood"):
             return 3
 
@@ -162,82 +168,72 @@ if uploaded_files:
         if japan or gchina:
             return 5
 
-        # If none matched, return 0
+        # Otherwise
         return 0
 
-    df["Workflow"] = df.apply(classify_workflow, axis=1)
+    df["PE level Workflow"] = df.apply(classify_pe_workflow, axis=1)
 
     # -----------------------------------------------------
-    # 6) Prepare GFE at the Product Event level
+    # 6) PE level GFE
+    #    => if ANY row in a given Product Event is GFE,
+    #       treat entire PE as GFE for counting
     # -----------------------------------------------------
-    # If ANY row in a given PE - PLI # is GFE, treat that entire PE as GFE
-    # for counting distinct product events.
-    any_gfe_by_pe = (
-        df.groupby("PE - PLI #")["IsGFE"]
-        .any()  # True if at least one row is True
-        .rename("Any_GFE")
-        .reset_index()
-    )
-    df = df.merge(any_gfe_by_pe, on="PE - PLI #", how="left")
+    df["PE level GFE"] = df.groupby("Product Event ID")["IsGFE"].transform(lambda grp: any(grp))
 
     # -----------------------------------------------------
-    # 7) Summaries (Distinct Product Event ID basis)
+    # 7) Summaries at the Product Event level
+    #    => drop duplicates so we have 1 row per Product Event ID
     # -----------------------------------------------------
-    # We drop duplicates so each PE - PLI # is counted only once
-    df_pe = df.drop_duplicates(subset=["PE - PLI #"]).copy()
+    df_pe = df.drop_duplicates(subset=["Product Event ID"]).copy()
 
-    # Summarize at the product-event level
+    # Summarize by PE-level workflow, TeamFile, etc.
     summary_pe = (
-        df_pe.groupby(["Workflow", "TeamFile", "Source System – PE"])
+        df_pe.groupby(["PE level Workflow", "TeamFile", "Source System – PE"])
         .agg(
-            Distinct_Product_Events=("PE - PLI #", "count"),
-            GFE_Events=("Any_GFE", "sum")  # sum of booleans => count of True
+            Distinct_Product_Events=("Product Event ID", "count"),
+            GFE_Events=("PE level GFE", "sum")  # sum of booleans => count True
         )
         .reset_index()
     )
 
-    st.write("### Distinct PE - PLI # Summary by Workflow & Team (Filename)")
+    st.write("### Distinct Product Event Summary (PE-Level)")
     st.dataframe(summary_pe)
 
-    # Download button for the product-event summary
     csv_data_pe = summary_pe.to_csv(index=False).encode("utf-8")
     st.download_button(
-        label="Download Distinct Product Event Summary",
+        label="Download PE-Level Summary",
         data=csv_data_pe,
-        file_name="workflow_summary_by_event_id.csv",
+        file_name="workflow_pe_summary.csv",
         mime="text/csv"
     )
 
     # -----------------------------------------------------
-    # (Optional) Row-level summary as before
+    # (Optional) You can still view row-level data or row-level summaries
     # -----------------------------------------------------
-    # If you still want to see row-level volumes, leave this block:
-    row_summary = (
-        df.groupby(["Workflow", "TeamFile", "Source System – PE"])
-        .agg(
-            GFE_Count=("IsGFE", "sum"),
-            Total_Rows=("IsGFE", "count")
+    with st.expander("See Row-Level Data & Summaries"):
+        st.write("#### Row-Level GFE Summary by Workflow & Team")
+        row_summary = (
+            df.groupby(["PE level Workflow", "TeamFile", "Source System – PE"])
+            .agg(
+                Row_GFE_Count=("IsGFE", "sum"),
+                Total_Rows=("IsGFE", "count")
+            )
+            .reset_index()
         )
-        .reset_index()
-    )
+        st.dataframe(row_summary)
 
-    st.write("### Row-Level GFE Summary by Workflow & Team (Filename)")
-    st.dataframe(row_summary)
+        csv_data_row = row_summary.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download Row-Level Summary",
+            data=csv_data_row,
+            file_name="workflow_row_level_summary.csv",
+            mime="text/csv"
+        )
 
-    csv_data_row = row_summary.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="Download Row-Level GFE Summary",
-        data=csv_data_row,
-        file_name="workflow_row_level_summary.csv",
-        mime="text/csv"
-    )
-
-    # -----------------------------------------------------
-    # (Optional) Show the full classified DataFrame by File
-    # -----------------------------------------------------
-    with st.expander("See Full Classified Data (by File)"):
+        # Show full DataFrame by file
+        st.write("#### Classified Data by File")
         for team_name in df["TeamFile"].unique():
-            st.write(f"### Classified Data from: {team_name}")
+            st.write(f"**Team File:** {team_name}")
             subset_df = df[df["TeamFile"] == team_name].copy()
             st.dataframe(subset_df)
 

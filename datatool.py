@@ -214,7 +214,7 @@ if uploaded_files:
     # If you only want "PE level Workflow" as the row index, do this:
 
     pivot_df = summary_pe.pivot_table(
-        index="PE level Workflow",
+        index=["PE level Workflow", "TeamFile"],
         columns="Source System – PE",
         values="GFE_Events",
         aggfunc="sum",

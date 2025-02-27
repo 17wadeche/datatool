@@ -42,7 +42,7 @@ if uploaded_files:
     st.dataframe(df)
 
     # -----------------------------------------------------------------
-    # STEP A: Flag GFE rows at the row-level
+    # STEP A: Flag GFE rows (row-level)
     # -----------------------------------------------------------------
     gfe_keywords = ["Follow-up for Prod/Info", "Follow Up for Information"]
     df["IsGFE"] = df["Communication"].apply(
@@ -51,22 +51,20 @@ if uploaded_files:
 
     # -----------------------------------------------------------------
     # STEP B: PLI-Level KnowledgeClass
-    #         (1) Group by PE - PLI # to see distinct RFR codes
+    #         1) Group by PE - PLI # to see distinct RFR codes
     # -----------------------------------------------------------------
-    # Count how many distinct RFR codes for each PE - PLI #
     pli_rfr_count = (
         df.groupby("PE - PLI #")["RFR Codes"]
         .nunique()
         .rename("pli_num_distinct_rfr")
     )
 
-    # Also get the frequency of each RFR code across the entire dataset
+    # Frequency of each RFR code across the entire dataset
     rfr_freq = df["RFR Codes"].value_counts().to_dict()
 
     # Merge pli_rfr_count back into df
     df = df.merge(pli_rfr_count, on="PE - PLI #", how="left")
 
-    # Define a function to classify at the row level, based on the PLI #'s RFR
     def classify_pli_level(row):
         """Classify each row based on its PLI # group."""
         # If that PLI # has > 1 distinct RFR => Not Well Understood
@@ -82,7 +80,7 @@ if uploaded_files:
     # -----------------------------------------------------------------
     # STEP C: PE-Level KnowledgeClass
     #         If ANY PLI in the same Product Event ID is Not Well Understood,
-    #         then the entire Product Event ID is Not Well Understood.
+    #         then the entire Product Event ID is Not Well Understood
     # -----------------------------------------------------------------
     df["PE level KnowledgeClass"] = df.groupby("Product Event ID")["PLI level KnowledgeClass"].transform(
         lambda group: "Not Well Understood"
@@ -91,7 +89,7 @@ if uploaded_files:
     )
 
     # -----------------------------------------------------------------
-    # STEP D: Region & FDA checks
+    # STEP D: Region & FDA checks (unchanged logic)
     # -----------------------------------------------------------------
     eu_countries = {
         "Austria", "Belgium", "Croatia", "Cyprus", "Czech Republic",
@@ -182,10 +180,8 @@ if uploaded_files:
     # STEP G: Summaries at the Product Event ID level
     #         => 1 count per unique Product Event
     # -----------------------------------------------------------------
-    # Drop duplicates so each Product Event ID only appears once
     df_pe = df.drop_duplicates(subset=["Product Event ID"]).copy()
 
-    # Summarize by "PE level Workflow", "TeamFile", and "Source System – PE"
     summary_pe = (
         df_pe.groupby(["PE level Workflow", "TeamFile", "Source System – PE"])
         .agg(
@@ -208,10 +204,9 @@ if uploaded_files:
     )
 
     # -----------------------------------------------------------------
-    # (OPTIONAL) Show a row-level summary or data if you need it
+    # (OPTIONAL) Row-level details or summaries if needed
     # -----------------------------------------------------------------
     with st.expander("3) (Optional) See Row-Level Data/Summaries"):
-        # Row-level GFE summary
         row_summary = (
             df.groupby(["PE level Workflow", "TeamFile", "Source System – PE"])
             .agg(

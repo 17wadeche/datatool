@@ -54,7 +54,7 @@ if uploaded_files:
     # -----------------------------------------------------
     # Distinct RFR per PLI
     pli_rfr_counts = (
-        df.groupby("PE PLI #")["RFR Codes"]
+        df.groupby("PE - PLI #")["RFR Codes"]
         .nunique()
         .rename("num_distinct_rfr")
     )
@@ -62,7 +62,7 @@ if uploaded_files:
     rfr_freq = df["RFR Codes"].value_counts().to_dict()
 
     # Merge back
-    df = df.merge(pli_rfr_counts, on="PE PLI #", how="left")
+    df = df.merge(pli_rfr_counts, on="PE - PLI #", how="left")
 
     def classify_well_understood(row):
         if row["num_distinct_rfr"] > 1:

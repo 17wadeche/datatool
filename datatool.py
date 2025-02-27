@@ -89,7 +89,7 @@ if uploaded_files:
     )
 
     # -----------------------------------------------------------------
-    # STEP D: Region & FDA checks (unchanged logic)
+    # STEP D: Region & FDA checks
     # -----------------------------------------------------------------
     eu_countries = {
         "Austria", "Belgium", "Croatia", "Cyprus", "Czech Republic",
@@ -137,20 +137,20 @@ if uploaded_files:
         gchina = is_greater_china(country)
         fda_rep = is_fda_reportable(rep_text)
 
-        # Workflow 1: US territory, NOT FDA Reportable, Well Understood
+        # Workflow 1
         if us_terr and (not fda_rep) and (knowledge == "Well Understood"):
             return 1
 
-        # Workflow 2: (US FDA Reportable) OR (EU) OR (Canada), AND Well Understood
+        # Workflow 2
         if knowledge == "Well Understood":
             if (us_terr and fda_rep) or eu or canada:
                 return 2
 
-        # Workflow 3: (US or EU or Canada), Not Well Understood
+        # Workflow 3
         if (us_terr or eu or canada) and (knowledge == "Not Well Understood"):
             return 3
 
-        # Workflow 4: OUS-other => not US, not EU, not Canada, not Japan, not G. China
+        # Workflow 4
         is_ous_other = (
             not us_terr
             and not eu
@@ -161,11 +161,11 @@ if uploaded_files:
         if is_ous_other:
             return 4
 
-        # Workflow 5: Japan & Greater China
+        # Workflow 5
         if japan or gchina:
             return 5
 
-        # Otherwise, return 0
+        # Otherwise
         return 0
 
     df["PE level Workflow"] = df.apply(classify_pe_workflow, axis=1)
@@ -180,64 +180,68 @@ if uploaded_files:
     # STEP G: Summaries at the Product Event ID level
     #         => 1 count per unique Product Event
     # -----------------------------------------------------------------
+    # We drop duplicates so each Product Event ID is listed once
     df_pe = df.drop_duplicates(subset=["Product Event ID"]).copy()
 
     summary_pe = (
         df_pe.groupby(["PE level Workflow", "TeamFile", "Source System – PE"])
         .agg(
-            Distinct_Product_Events=("Product Event ID", "count"),
-            GFE_Events=("PE level GFE", "sum")
+            # Distinct_Product_Events=("Product Event ID", "count"),
+            GFE_Events=("PE level GFE", "sum")  # sum of booleans => # of GFE
         )
         .reset_index()
     )
 
-    st.write("### 2) Distinct Product Event Summary (PE-Level)")
+    st.write("### 2) Product Event Summary (PE-Level)")
+    st.write("_(Distinct Product Events are counted once; only GFE_Events shown.)_")
     st.dataframe(summary_pe)
 
-    # Downloadable CSV of the PE-level summary
-    csv_data_pe = summary_pe.to_csv(index=False).encode("utf-8")
+    # -----------------------------------------------------------------
+    # STEP H: PIVOT => Source systems across columns
+    #         We'll pivot on "Source System – PE" as columns,
+    #         use "PE level Workflow" (and optionally TeamFile) as rows,
+    #         and fill with GFE_Events. 
+    # -----------------------------------------------------------------
+    # Example pivot with both "PE level Workflow" AND "TeamFile" as the row index:
+    # pivot_df = summary_pe.pivot_table(
+    #     index=["PE level Workflow", "TeamFile"],
+    #     columns="Source System – PE",
+    #     values="GFE_Events",
+    #     aggfunc="sum",        # sum because multiple rows could exist
+    #     fill_value=0
+    # )
+    #
+    # If you only want "PE level Workflow" as the row index, do this:
+
+    pivot_df = summary_pe.pivot_table(
+        index="PE level Workflow",
+        columns="Source System – PE",
+        values="GFE_Events",
+        aggfunc="sum",
+        fill_value=0
+    )
+
+    st.write("### 3) Pivot: Source System across columns (GFE Events)")
+    st.dataframe(pivot_df)
+
+    # (Optional) Provide a CSV download of pivot
+    csv_pivot = pivot_df.reset_index().to_csv(index=False).encode("utf-8")
     st.download_button(
-        label="Download PE-Level Summary",
-        data=csv_data_pe,
-        file_name="workflow_pe_summary.csv",
+        label="Download Pivot (GFE Events)",
+        data=csv_pivot,
+        file_name="pivot_gfe_events.csv",
         mime="text/csv"
     )
 
     # -----------------------------------------------------------------
-    # (OPTIONAL) Row-level details or summaries if needed
+    # (OPTIONAL) Row-level details or further expansions
     # -----------------------------------------------------------------
-    with st.expander("3) (Optional) See Row-Level Data/Summaries"):
-        row_summary = (
-            df.groupby(["PE level Workflow", "TeamFile", "Source System – PE"])
-            .agg(
-                Row_GFE_Count=("IsGFE", "sum"),
-                Total_Rows=("IsGFE", "count")
-            )
-            .reset_index()
-        )
-
-        st.write("#### Row-Level GFE Summary")
-        st.dataframe(row_summary)
-
-        csv_data_row = row_summary.to_csv(index=False).encode("utf-8")
+    with st.expander("4) (Optional) See Full Row-Level Data"):
+        st.dataframe(df)
+        csv_data_row = df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            label="Download Row-Level Summary",
+            label="Download Full Row-Level Data",
             data=csv_data_row,
-            file_name="workflow_row_level_summary.csv",
+            file_name="row_level_data.csv",
             mime="text/csv"
         )
-
-        # Show the full DataFrame by file
-        st.write("#### Classified Data by File:")
-        for team_name in df["TeamFile"].unique():
-            st.write(f"**Team File:** {team_name}")
-            subset_df = df[df["TeamFile"] == team_name].copy()
-            st.dataframe(subset_df)
-
-            csv_data = subset_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label=f"Download '{team_name}' Full Classified Data",
-                data=csv_data,
-                file_name=f"{team_name}_classified.csv",
-                mime="text/csv"
-            )

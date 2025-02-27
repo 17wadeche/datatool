@@ -179,7 +179,7 @@ if uploaded_files:
     # 6) Summaries (GFE volumes by Workflow & Team)
     # -----------------------------------------------------
     summary = (
-        df.groupby(["Workflow", "TeamFile"])
+        df.groupby(["Workflow", "TeamFile", "Source System – PE"])
         .agg(
             GFE_Count=("IsGFE", "sum"),
             Total_Rows=("IsGFE", "count")

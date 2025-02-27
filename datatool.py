@@ -200,5 +200,20 @@ if uploaded_files:
     )
 
     # Optionally show the full classified DataFrame
-    with st.expander("See Full Classified Data"):
-        st.dataframe(df)
+    with st.expander("See Full Classified Data (by File)"):
+        # For each unique file name in the combined DataFrame
+        for team_name in df["TeamFile"].unique():
+            st.write(f"### Classified Data from: {team_name}")
+
+            # Subset the DataFrame for this specific file/team
+            subset_df = df[df["TeamFile"] == team_name].copy()
+            st.dataframe(subset_df)
+
+            # Create a CSV download button for just this subset
+            csv_data = subset_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label=f"Download '{team_name}' Full Classified Data",
+                data=csv_data,
+                file_name=f"{team_name}_classified.csv",
+                mime="text/csv"
+            )
